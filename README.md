@@ -137,6 +137,70 @@ In GTKWave: File → Open New Tab → `sim/cpu_tb.vcd`, then drag signals (`clk`
 
 ---
 
+## C++ Extension — Assembler & Simulator
+
+A standalone C++ toolchain that lets you write assembly, assemble it to hex, and run it — no Verilog toolchain needed.
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `cpp/assembler.cpp` | Two-pass assembler: `.asm` → `.hex` |
+| `cpp/simulator.cpp` | Cycle-accurate CPU simulator with per-instruction trace |
+| `cpp/test_program.asm` | Demo program exercising all opcodes and labels |
+| `cpp/Makefile` | Builds both tools and runs end-to-end test |
+
+### Build & Run
+
+```bash
+cd cpp
+make          # builds assembler and simulator
+make test     # assembles test_program.asm and simulates it
+```
+
+Or manually:
+
+```bash
+./assembler my_program.asm out.hex   # assemble
+./simulator out.hex                  # simulate with trace
+./simulator out.hex --no-trace       # just show final register state
+```
+
+### Assembly Syntax
+
+```asm
+; Comments with semicolon
+        LDI R1, 10          ; load immediate (decimal or 0x hex)
+        LDI R2, 0x05
+        ADD R3, R1, R2      ; R-type: rd, rs1, rs2
+        SUB R4, R1, R2
+        AND R5, R1, R2
+        OR  R6, R1, R2
+        XOR R7, R1, R2
+        SUB R1, R5, R5      ; sets zero flag
+        BEQ SKIP            ; branch if zero flag set
+        LDI R1, 0xFF        ; skipped
+SKIP:   LDI R2, 0x42        ; label target
+HALT:   JMP HALT            ; halt loop
+```
+
+### Simulator Trace Output
+
+```
+Cycle  PC   Instr  Op   Operands         Effect
+-----  ---  -----  ---  ---------------  ------
+  [00] a40a  LDI  R1, 0x0a  => R1=0x0a
+  [01] a805  LDI  R2, 0x05  => R2=0x05
+  [02] 0ca0  ADD  R3, R1, R2  => R3=0x0f
+  [08] e00a  BEQ  0x0a
+  [0a] a842  LDI  R2, 0x42  => R2=0x42
+  [0b] c00b  JMP  0x0b
+```
+
+Each row shows: PC, raw 16-bit instruction word, mnemonic, operands, and the register effect after execution.
+
+---
+
 ## Test Program
 
 The program loaded into ROM (`tests/program.hex`) exercises every R-type instruction:
