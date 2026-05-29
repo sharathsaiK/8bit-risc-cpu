@@ -1,0 +1,9 @@
+sim/*.vcd
+sim/half_adder_tb
+sim/full_adder_tb
+sim/alu_tb
+sim/register_file_tb
+sim/program_counter_tb
+sim/instruction_memory_tb
+sim/control_unit_tb
+sim/cpu_tb
