@@ -7,3 +7,6 @@ sim/program_counter_tb
 sim/instruction_memory_tb
 sim/control_unit_tb
 sim/cpu_tb
+cpp/assembler
+cpp/simulator
+cpp/out.hex
