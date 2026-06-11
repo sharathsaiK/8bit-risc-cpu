@@ -1,17 +1,19 @@
-// 8 x 8-bit registers (R0–R7). R0 is always 0 (hardwired).
-module register_file (
+// 8 x WIDTH-bit registers (R0–R7). R0 is always 0 (hardwired).
+module register_file #(
+    parameter WIDTH = 64
+) (
     input        clk,
     input        we,          // write enable
     input  [2:0] rs1,         // source 1 address
     input  [2:0] rs2,         // source 2 address
     input  [2:0] rd,          // destination address
-    input  [7:0] write_data,
-    output [7:0] read_data1,
-    output [7:0] read_data2
+    input  [WIDTH-1:0] write_data,
+    output [WIDTH-1:0] read_data1,
+    output [WIDTH-1:0] read_data2
 );
-    reg [7:0] regs [7:0];
+    reg [WIDTH-1:0] regs [7:0];
     integer j;
-    initial for (j = 0; j < 8; j = j+1) regs[j] = 8'b0;
+    initial for (j = 0; j < 8; j = j+1) regs[j] = {WIDTH{1'b0}};
 
     always @(posedge clk) begin
         if (we && rd != 3'b000)   // R0 stays zero

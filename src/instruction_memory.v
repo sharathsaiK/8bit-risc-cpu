@@ -1,12 +1,19 @@
-// ROM: 256 x 16-bit words, initialized from parameter or $readmemh file.
-// Read-only, combinational output.
+// ROM: 65536 x 32-bit words, loaded with $readmemh.
+// Hex file selectable at runtime with +hex=<path>.
+// Works in both Icarus and Verilator; defaults to tests/program.hex.
 module instruction_memory (
-    input  [7:0]  addr,
-    output [15:0] instruction
+    input  [15:0] addr,
+    output [31:0] instruction
 );
-    reg [15:0] mem [0:255];
+    reg [31:0] mem [0:65535];
+    reg [1023:0] hexfile;
 
-    initial $readmemh("tests/program.hex", mem);
+    initial begin
+        if ($value$plusargs("hex=%s", hexfile))
+            $readmemh(hexfile, mem);
+        else
+            $readmemh("tests/program.hex", mem);
+    end
 
     assign instruction = mem[addr];
 endmodule
