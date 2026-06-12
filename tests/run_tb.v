@@ -41,7 +41,7 @@ module run_tb;
         $display("R5=%h", uut.rf.regs[5]);
         $display("R6=%h", uut.rf.regs[6]);
         $display("R7=%h", uut.rf.regs[7]);
-        $display("PC=%h", uut.if_ex_pc);   // EX-stage PC = last retired instr
+        $display("PC=%h", uut.id_ex_pc);   // EX-stage PC = last retired instr
         $display("SP=%h", uut.sp);
         $finish;
     end

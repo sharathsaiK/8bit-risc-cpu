@@ -153,7 +153,9 @@ struct CPU {
             trap_entry(pc, CAUSE_TIMER, trace, "IRQ");
             ++cycles;
             tick_timer();
-            // 2-stage pipeline bubble after trap entry
+            // 5-stage pipeline: 2 bubble cycles after trap entry (IF/ID and ID/EX flushed)
+            ++cycles;
+            tick_timer();
             ++cycles;
             tick_timer();
             return true;
@@ -188,7 +190,9 @@ struct CPU {
             trap_entry((uint16_t)(pc + 1), c, trace, invalid ? "EXC invalid" : "EXC privilege");
             ++cycles;
             tick_timer();
-            // 2-stage pipeline bubble after trap entry
+            // 5-stage pipeline: 2 bubble cycles after trap entry (IF/ID and ID/EX flushed)
+            ++cycles;
+            tick_timer();
             ++cycles;
             tick_timer();
             return true;
@@ -290,9 +294,11 @@ struct CPU {
         pc = next_pc;
         ++cycles;
         tick_timer();
-        // 2-stage pipeline: taken branch/call/ret/iret squashes the IF stage →
-        // one bubble cycle during which the timer still ticks.
+        // 5-stage pipeline: taken branch/call/ret/iret flushes IF/ID and ID/EX →
+        // two bubble cycles during which the timer still ticks.
         if (branch && !halted) {
+            ++cycles;
+            tick_timer();
             ++cycles;
             tick_timer();
         }

@@ -13,7 +13,7 @@ module cpu_tb;
     always #5 clk = ~clk;
 
     // expose internals for checking
-    wire [15:0] pc      = uut.if_ex_pc;   // EX-stage PC (last committed instruction)
+    wire [15:0] pc      = uut.id_ex_pc;   // EX-stage PC (last committed instruction)
     wire [15:0] sp      = uut.sp;
     wire [63:0] r1      = uut.rf.regs[1];
     wire [63:0] r2      = uut.rf.regs[2];
