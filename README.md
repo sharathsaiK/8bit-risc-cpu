@@ -1,73 +1,92 @@
-# 8-bit RISC CPU (Verilog)
+# 64-bit RISC CPU (Verilog) — ISA v3
 
-A fully functional 8-bit RISC CPU implemented in Verilog, simulated with Icarus Verilog and visualized in GTKWave.
-
----
-
-## Architecture
-
-```
-          ┌─────────────────────────────────────────────────────┐
-          │                      CPU                            │
-          │                                                     │
-          │  ┌──────────┐    ┌──────────────────┐              │
-          │  │  Program │    │  Instruction     │              │
-          │  │  Counter │───▶│  Memory (ROM)    │              │
-          │  │  (PC)    │    │  256 x 16-bit    │              │
-          │  └──────────┘    └────────┬─────────┘              │
-          │       ▲                   │ [15:0] instr            │
-          │  pc_load + imm8           │                         │
-          │       │          ┌────────▼─────────┐              │
-          │       │          │  Control Unit    │              │
-          │       │          │  (opcode decode) │              │
-          │       │          └────────┬─────────┘              │
-          │       │    ┌──────────────┤ alu_op, reg_write,      │
-          │       │    │              │ alu_src, pc_load        │
-          │       │    │     ┌────────▼─────────┐              │
-          │       │    │     │  Register File   │              │
-          │       │    │     │  R0–R7 (8x8-bit) │              │
-          │       │    │     │  R0 = 0 always   │              │
-          │       │    │     └──┬──────────┬────┘              │
-          │       │    │    rs1 │          │ rs2 / imm8 (mux)  │
-          │       │    │        │   ┌──────▼──────┐            │
-          │       │    │        └──▶│     ALU     │            │
-          │       │    │            │  8 ops      │            │
-          │       │    │            │  zero flag  │            │
-          │       │    │            └──────┬──────┘            │
-          │       │    │           result  │                   │
-          │       │    └──────────────────▶│ write_data        │
-          │       └───────────── pc_load ◀─┘ (BEQ/JMP)        │
-          └─────────────────────────────────────────────────────┘
-```
-
-**Pipeline:** Single-cycle (combinational decode + execute, register write on clock edge).
+A fully custom **64-bit pipelined RISC processor** built from scratch in Verilog, with a
+hand-written C++ assembler and cycle-accurate simulator.  Verified by **three-engine
+co-simulation**: every program is run on Icarus Verilog, Verilator, and the C++ simulator —
+outputs must match byte-for-byte.
 
 ---
 
-## ISA — Instruction Set Architecture
+## What this CPU can do
 
-All instructions are **16 bits**:
+| Feature | Detail |
+|---------|--------|
+| **Data width** | 64-bit registers, ALU, and memory words |
+| **Pipeline** | 5-stage IF / ID / EX / MEM / WB with full forwarding |
+| **Instruction set** | 26 instructions — arithmetic, logic, memory, control flow, I/O, interrupts |
+| **Registers** | R0–R7 (64-bit); R0 hardwired to 0 |
+| **Memory** | 64K × 64-bit data RAM + 64K × 32-bit instruction ROM |
+| **Hardware stack** | PUSH / POP / CALL / RET with a dedicated stack pointer |
+| **Interrupts** | Programmable timer — fires a hardware interrupt at a set period |
+| **Privilege levels** | Kernel mode and user mode; I/O and privileged instructions are kernel-only |
+| **Exceptions** | Invalid opcode and privilege-violation exceptions with a trap handler |
+| **Console I/O** | Memory-mapped OUT (print), IN (read), TIMER, IVEC, CAUSE ports |
+| **Toolchain** | C++ assembler (labels, hex/decimal literals) + simulator (trace, step, cosim modes) |
+
+---
+
+## Pipeline
 
 ```
-[15:13] opcode  [12:10] rd  [9:7] rs1  [6:4] rs2  [7:0] imm8
+  ┌────┐  IF/ID  ┌────┐  ID/EX  ┌────┐  EX/MEM  ┌─────┐  MEM/WB  ┌────┐
+  │ IF │────────▶│ ID │────────▶│ EX │─────────▶│ MEM │─────────▶│ WB │
+  └────┘         └────┘         └────┘           └─────┘           └────┘
+   Fetch          Decode          ALU +            Forward           Write
+   from ROM       read regs       memory +         result            result to
+                  (write-first    branch           to next           register
+                  bypass)         resolution       stage             file
 ```
-> `rs2` and `imm8` share bits — the control unit selects which is used via `alu_src`.
 
-| Opcode | Mnemonic | Operation | Type |
-|--------|----------|-----------|------|
-| `000`  | ADD      | R[rd] = R[rs1] + R[rs2] | R |
-| `001`  | SUB      | R[rd] = R[rs1] − R[rs2] | R |
-| `010`  | AND      | R[rd] = R[rs1] & R[rs2] | R |
-| `011`  | OR       | R[rd] = R[rs1] \| R[rs2] | R |
-| `100`  | XOR      | R[rd] = R[rs1] ^ R[rs2] | R |
-| `101`  | LDI      | R[rd] = imm8 | I |
-| `110`  | JMP      | PC = imm8 | J |
-| `111`  | BEQ      | if (zero) PC = imm8 | J |
+**Forwarding paths** (no stalls except control hazards):
 
-**ALU operations (3-bit `alu_op`):**
-ADD, SUB, AND, OR, XOR, NOT, SHL, SHR
+| Path | Covers |
+|------|--------|
+| EX/MEM → EX | instruction immediately after a producer |
+| MEM/WB → EX | two instructions after a producer |
+| MEM/WB → ID | three instructions after (write-first register-file bypass) |
 
-**Registers:** R0–R7 (8-bit). R0 is hardwired to 0.
+**Control hazard:** taken branches, calls, returns, and traps flush both IF/ID and ID/EX
+→ **2-cycle bubble**. No load-use stalls because data-memory reads are combinational in EX.
+
+---
+
+## Instruction Set (ISA v3)
+
+All instructions are **32 bits**:
+
+```
+R-type: [31:26] opcode  [25:23] rd  [22:20] rs1  [19:17] rs2  [16:0] —
+I-type: [31:26] opcode  [25:23] rd  [22:20] rs1  [15:0]  imm16
+```
+
+| Mnemonic | Operation |
+|----------|-----------|
+| ADD / SUB | 64-bit add / subtract (sets carry flag) |
+| AND / OR / XOR / NOT | bitwise logic |
+| SHL / SHR | shift left / right by 1 |
+| MUL / DIV / MOD | multiply, divide, modulo |
+| LDI | load 16-bit immediate (zero-extended) |
+| LD / ST | load / store 64-bit word from/to data memory or I/O port |
+| JMP / BEQ / BNE | unconditional / conditional branches |
+| CALL / RET | subroutine call (pushes return address) / return |
+| PUSH / POP | stack operations |
+| OUT | print a register to the output stream |
+| STI / CLI | enable / disable interrupts |
+| IRET | return from interrupt (restores flags, mode, PC) |
+| HLT | stop the CPU |
+
+---
+
+## Memory Map
+
+| Address | Port | Access | Description |
+|---------|------|--------|-------------|
+| `0x0000–0xFEFF` | — | user + kernel | General-purpose data RAM |
+| `0xFF00` | IO_IN | kernel | Read next value from input stream |
+| `0xFF01` | IO_OUT | kernel | Write value to output stream (also triggers OUT) |
+| `0xFF02` | IO_TIMER | kernel | Set timer period (0 = disabled) |
+| `0xFF04` | IO_IVEC | kernel | Interrupt/exception handler address |
+| `0xFF05` | IO_CAUSE | kernel | Trap cause: 1=timer, 2=invalid opcode, 3=privilege |
 
 ---
 
@@ -75,26 +94,30 @@ ADD, SUB, AND, OR, XOR, NOT, SHL, SHR
 
 ```
 8bit-risc-cpu/
+├── Makefile
 ├── src/
-│   ├── half_adder.v        # 1-bit half adder
-│   ├── full_adder.v        # 1-bit full adder (uses half_adder)
-│   ├── alu.v               # 8-bit ALU, 8 operations
-│   ├── register_file.v     # 8x8-bit register file
-│   ├── program_counter.v   # 8-bit PC with load/reset
-│   ├── instruction_memory.v# 256x16-bit ROM
-│   ├── control_unit.v      # Opcode decoder
-│   └── cpu.v               # Top-level integration
+│   ├── cpu.v               # top-level: 5-stage pipeline, forwarding, traps
+│   ├── alu.v               # 64-bit ALU (ADD/SUB/AND/OR/XOR/NOT/SHL/SHR/MUL/DIV/MOD)
+│   ├── control_unit.v      # 6-bit opcode decoder
+│   ├── register_file.v     # 8 × 64-bit registers (R0 hardwired to 0)
+│   ├── data_memory.v       # 64K × 64-bit RAM (sync write, comb read)
+│   ├── instruction_memory.v# 64K × 32-bit ROM
+│   ├── program_counter.v   # 16-bit PC with load/halt/reset
+│   ├── half_adder.v / full_adder.v
 ├── tests/
-│   ├── half_adder_tb.v
-│   ├── full_adder_tb.v
-│   ├── alu_tb.v
-│   ├── register_file_tb.v
-│   ├── program_counter_tb.v
-│   ├── instruction_memory_tb.v
-│   ├── control_unit_tb.v
-│   ├── cpu_tb.v            # Full CPU simulation
-│   └── program.hex         # Test program loaded into ROM
-└── sim/                    # Compiled binaries + VCD waveforms
+│   ├── cpu_tb.v            # self-checking full-CPU test
+│   ├── run_tb.v            # generic runner (+hex=<file>)
+│   ├── cosim.sh            # 3-engine co-simulation diff
+│   └── *.hex               # assembled test programs
+├── cpp/
+│   ├── assembler.cpp       # two-pass assembler (.asm → .hex)
+│   ├── simulator.cpp       # cycle-accurate C++ simulator (trace/step/cosim)
+│   ├── test_program.asm    # exercises all 26 instructions
+│   ├── fib.asm             # Fibonacci (prints fib(0)–fib(93))
+│   ├── timer_irq.asm       # timer interrupt test
+│   ├── privilege.asm       # user-mode privilege violation test
+│   └── invalid_opcode.asm  # exception handling test
+└── sim/                    # compiled testbenches + VCD waveforms
 ```
 
 ---
@@ -103,127 +126,66 @@ ADD, SUB, AND, OR, XOR, NOT, SHL, SHR
 
 ### Prerequisites
 ```bash
-brew install icarus-verilog
-brew install --cask gtkwave
+brew install icarus-verilog verilator surfer
 ```
 
-### Run all module tests
+### Build and test everything
 ```bash
-cd 8bit-risc-cpu
-
-iverilog -o sim/half_adder_tb      src/half_adder.v tests/half_adder_tb.v && vvp sim/half_adder_tb
-iverilog -o sim/full_adder_tb      src/half_adder.v src/full_adder.v tests/full_adder_tb.v && vvp sim/full_adder_tb
-iverilog -o sim/alu_tb             src/half_adder.v src/full_adder.v src/alu.v tests/alu_tb.v && vvp sim/alu_tb
-iverilog -o sim/register_file_tb   src/register_file.v tests/register_file_tb.v && vvp sim/register_file_tb
-iverilog -o sim/program_counter_tb src/program_counter.v tests/program_counter_tb.v && vvp sim/program_counter_tb
-iverilog -o sim/instruction_memory_tb src/instruction_memory.v tests/instruction_memory_tb.v && vvp sim/instruction_memory_tb
-iverilog -o sim/control_unit_tb    src/control_unit.v tests/control_unit_tb.v && vvp sim/control_unit_tb
+make all      # build C++ tools, assemble programs, compile Icarus + Verilator
+make test     # unit tests + self-checking CPU test
+make cosim    # run all 5 programs on C++, Icarus, and Verilator — diff outputs
 ```
 
-### Run the full CPU simulation
+### Write and run your own program
 ```bash
-iverilog -o sim/cpu_tb \
-  src/half_adder.v src/full_adder.v src/alu.v \
-  src/register_file.v src/program_counter.v \
-  src/instruction_memory.v src/control_unit.v \
-  src/cpu.v tests/cpu_tb.v && vvp sim/cpu_tb
+./cpp/assembler my_prog.asm my_prog.hex     # assemble
+./cpp/simulator my_prog.hex                 # software trace
+./cpp/simulator my_prog.hex --step          # step one instruction at a time
+vvp sim/run_tb +hex=my_prog.hex            # run on Verilog hardware (Icarus)
+./obj_dir/Vrun_tb +hex=my_prog.hex          # run on Verilog hardware (Verilator)
+tests/cosim.sh my_prog.hex                  # prove all three agree
 ```
 
-### View waveform
+### View waveforms
 ```bash
-open /Applications/gtkwave.app sim/cpu_tb.vcd
+vvp sim/cpu_tb          # generates sim/cpu_tb.vcd
+surfer sim/cpu_tb.vcd   # open in Surfer
 ```
-In GTKWave: File → Open New Tab → `sim/cpu_tb.vcd`, then drag signals (`clk`, `rst`, `pc`, `opcode`, `alu_res`, `r1`–`r7`) into the wave viewer.
+
+In Surfer: drill into the `cpu_tb/uut` scope and add `if_id_*`, `id_ex_*`,
+`ex_mem_*`, `mem_wb_*` signals to watch instructions move through the 5 stages.
 
 ---
 
-## C++ Extension — Assembler & Simulator
-
-A standalone C++ toolchain that lets you write assembly, assemble it to hex, and run it — no Verilog toolchain needed.
-
-### Files
-
-| File | Purpose |
-|------|---------|
-| `cpp/assembler.cpp` | Two-pass assembler: `.asm` → `.hex` |
-| `cpp/simulator.cpp` | Cycle-accurate CPU simulator with per-instruction trace |
-| `cpp/test_program.asm` | Demo program exercising all opcodes and labels |
-| `cpp/Makefile` | Builds both tools and runs end-to-end test |
-
-### Build & Run
-
-```bash
-cd cpp
-make          # builds assembler and simulator
-make test     # assembles test_program.asm and simulates it
-```
-
-Or manually:
-
-```bash
-./assembler my_program.asm out.hex   # assemble
-./simulator out.hex                  # simulate with trace
-./simulator out.hex --no-trace       # just show final register state
-```
-
-### Assembly Syntax
+## Assembly Syntax
 
 ```asm
-; Comments with semicolon
-        LDI R1, 10          ; load immediate (decimal or 0x hex)
-        LDI R2, 0x05
-        ADD R3, R1, R2      ; R-type: rd, rs1, rs2
-        SUB R4, R1, R2
-        AND R5, R1, R2
-        OR  R6, R1, R2
-        XOR R7, R1, R2
-        SUB R1, R5, R5      ; sets zero flag
-        BEQ SKIP            ; branch if zero flag set
-        LDI R1, 0xFF        ; skipped
-SKIP:   LDI R2, 0x42        ; label target
-HALT:   JMP HALT            ; halt loop
+; semicolon comments
+        LDI  R1, 10           ; load immediate (decimal or 0x hex)
+        LDI  R2, 0xFF04       ; 16-bit immediate
+        ST   [R2], R1         ; mem[R2] = R1  (store)
+        LD   R3, [R2]         ; R3 = mem[R2]  (load)
+        ADD  R4, R1, R3       ; rd, rs1, rs2
+        CALL MYFUNC           ; push return addr, jump to label
+MYFUNC: MUL  R1, R1, R3
+        RET
+        STI                   ; enable interrupts
+        CLI                   ; disable interrupts
+        OUT  R1               ; print R1
+        HLT
 ```
-
-### Simulator Trace Output
-
-```
-Cycle  PC   Instr  Op   Operands         Effect
------  ---  -----  ---  ---------------  ------
-  [00] a40a  LDI  R1, 0x0a  => R1=0x0a
-  [01] a805  LDI  R2, 0x05  => R2=0x05
-  [02] 0ca0  ADD  R3, R1, R2  => R3=0x0f
-  [08] e00a  BEQ  0x0a
-  [0a] a842  LDI  R2, 0x42  => R2=0x42
-  [0b] c00b  JMP  0x0b
-```
-
-Each row shows: PC, raw 16-bit instruction word, mnemonic, operands, and the register effect after execution.
 
 ---
 
-## Test Program
+## Test Programs
 
-The program loaded into ROM (`tests/program.hex`) exercises every R-type instruction:
+| File | What it tests |
+|------|--------------|
+| `test_program.asm` | All 26 instructions, CALL/RET, PUSH/POP, branches, memory |
+| `fib.asm` | Fibonacci up to fib(93) via a recursive-style loop |
+| `timer_irq.asm` | Timer fires every 10 cycles; handler counts interrupts |
+| `privilege.asm` | User-mode code triggers a privilege exception, kernel handles it |
+| `invalid_opcode.asm` | Bad opcode triggers an exception, kernel halts cleanly |
 
-```asm
-LDI R1, 0x0A      ; R1 = 10
-LDI R2, 0x05      ; R2 = 5
-ADD R3, R1, R2    ; R3 = 15  (0x0F)
-SUB R4, R1, R2    ; R4 = 5   (0x05)
-AND R5, R1, R2    ; R5 = 0   (0x0A & 0x05 = 0)
-OR  R6, R1, R2    ; R6 = 15  (0x0F)
-XOR R7, R1, R2    ; R7 = 15  (0x0F)
-JMP 0x07          ; halt (jump to self)
-```
-
-Expected register state after simulation:
-
-| Register | Value |
-|----------|-------|
-| R1 | `0x0A` |
-| R2 | `0x05` |
-| R3 | `0x0F` |
-| R4 | `0x05` |
-| R5 | `0x00` |
-| R6 | `0x0F` |
-| R7 | `0x0F` |
+All five pass co-simulation: C++ simulator, Icarus Verilog, and Verilator produce
+identical output.
